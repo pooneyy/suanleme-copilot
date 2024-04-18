@@ -4,7 +4,7 @@
 Author       : Pooneyy
 Date         : 2024-03-10 16:52:07
 LastEditors  : Pooneyy 85266337+pooneyy@users.noreply.github.com
-LastEditTime : 2024-04-02 19:53:02
+LastEditTime : 2024-04-18 22:27:27
 FilePath     : /suanleme-copilot/main.py
 Description  : “算了么”平台 suanleme-copilot
 
@@ -29,6 +29,7 @@ def timeStamp_To_dateTime(timeStamp):return datetime.datetime.fromtimestamp(int(
 def timeStamp_To_date(timeStamp):return datetime.datetime.fromtimestamp(int(timeStamp), pytz.timezone('Asia/Shanghai')).strftime('%Y-%m-%d')
 def isoDateTime_To_dateTime(iso_date_time):return datetime.datetime.strptime(iso_date_time, "%Y-%m-%dT%H:%M:%S.%f%z").strftime('%Y-%m-%d %H:%M:%S')
 def isoDateTime_To_date(iso_date_time):return datetime.datetime.strptime(iso_date_time, "%Y-%m-%dT%H:%M:%S.%f%z").strftime('%Y-%m-%d')
+def isoDateTime_To_timeStamp(iso_date_time):return int(time.mktime(time.strptime(iso_date_time, "%Y-%m-%dT%H:%M:%S.%f%z")))
 def date_To_timeStamp(date):return int(time.mktime(time.strptime(date, "%Y-%m-%d")))
 def get_last_month(timeStamp):return datetime.datetime.fromtimestamp(int((timeStamp - datetime.datetime.fromtimestamp(int(timeStamp), pytz.timezone('Asia/Shanghai')).day * 86400)), pytz.timezone('Asia/Shanghai')).strftime('%Y-%m')
 def timeStamp_To_date_and_hour(timeStamp):
@@ -137,7 +138,7 @@ def get_current_hour_score_record():
                     results.append(result)
         nextpage = json.loads(response.text)['next']
         page += 1
-        if timeStamp_To_date_and_hour(time.time()-3600) in response.text:break
+        if isoDateTime_To_timeStamp(resp_results[0]['created_time']) < time.time() - 3600:break
     return results
 
 def get_ongoing_tasks_info()-> list:
@@ -192,59 +193,30 @@ def get_a_machine_info(machine_id: str)-> dict:
     response = requests.get(url, headers=headers)
     return json.loads(response.text)
 
-def remark(deployment_task_ids:list, lost_deployment_task_ids:list, tasks_info:list):
+def remark(tasks_info:list):
     '''传入进行中的任务信息，比对现有的备注，如果备注与正在进行的任务不一致，则更新备注
-    param deployment_task_ids             : list 进行中的任务id列表
-    param lost_deployment_task_ids        : list 丢失的任务id列表
-    param task_ids                        : list 进行中的任务信息
+    param tasks_info                      : list 进行中的任务信息
     '''
-    tasks_info_dict = {i['id']:i for i in tasks_info}
+    tasks_info_dict = {i['machine']:i for i in tasks_info} # 将设备id作为任务信息的key
+    occupied_machines_id = [task['machine'] for task in tasks_info] # 正在进行任务的设备id列表
     machines_info = get_machines_info()
-    # 如果设备没有备注，而配置文件中已登记设备名，则将备注设为配置文件中的备注
     for machine in machines_info:
-        if machine['user_remark']:...
-        else:
-            machine_name = machine['name']
-            machine_remark = CONFIG['machines_remark'].get(machine_name)
-            if machine_remark:
-                remark = f"{machine_remark}"
-                remark_result = set_machine_remark(machine['id'], remark)
-                print(f"{get_current_dateTime()}\t{machine_name} 更新备注: {remark},{remark_result}")
-
-    # 同步一下信息
-    machines_info = get_machines_info()
-    machines_info_dict = {i['id']:i for i in machines_info}
-
-    # 处理正在进行的任务，比对运行它的机器的备注是否为正在进行的任务，如果不是，则更新备注
-    for task in deployment_task_ids:
-        machine_id = tasks_info_dict[task]['machine']
-        machine_name = machines_info_dict[machine_id]['name']
-        original_remark = machines_info_dict[machine_id]['user_remark']
-        if original_remark: # 如果原始的备注不为空
-            if str(task) in original_remark:continue # 且备注中包含任务id，则跳过
-        # 否则
+        machine_id = machine['id']
+        machine_name = machine['name']
         machine_remark = CONFIG['machines_remark'].get(machine_name)
-        if machine_remark: # 如果配置文件中已登记设备名
-            remark = f"{machine_remark} - {tasks_info_dict[task]['task']} - {task}"
+        # 只有配置文件中登记设备名，才会设置备注
+        if machine_remark:
+            if machine_id in occupied_machines_id:
+                # 检查正在进行任务的设备备注，是否为其正在进行的任务点，如果不是，则更新备注
+                if machine['user_remark']:
+                    # 如果备注中包含任务点id，则跳过
+                    if str(tasks_info_dict[machine_id]['id']) in machine['user_remark']:continue
+                remark = f"{machine_remark} - {tasks_info_dict[machine_id]['task']} - {tasks_info_dict[machine_id]['id']}"
+            else:
+                if machine['user_remark'] == machine_remark:continue
+                remark = machine_remark
             remark_result = set_machine_remark(machine_id, remark)
             print(f"{get_current_dateTime()}\t{machine_name} 更新备注: {remark},{remark_result}")
-
-    # 同步一下信息
-    machines_info = get_machines_info()
-
-    # 处理丢失的任务，如果设备列表中有失去任务的机器，则将设备的备注设为原始的备注
-    for task in lost_deployment_task_ids:    # 遍历丢失的任务id
-        for machine in machines_info:        # 遍历设备列表
-            machine_id = machine['id']
-            original_remark = machine['user_remark'] # 获取设备的原始备注
-            if original_remark:              # 如果原始的备注不为空
-                if str(task) in original_remark:    # 且备注中包含任务id
-                    machine_name = machine['name']
-                    machine_remark = CONFIG['machines_remark'].get(machine_name)
-                    if machine_remark:         # 且配置文件中已登记设备名
-                        remark = f"{machine_remark}"
-                        remark_result = set_machine_remark(machine_id, remark)
-                        print(f"{get_current_dateTime()}\t{machine_name} 更新备注: {remark},{remark_result}")
 
 def set_machine_remark(machine_id: str, remark: str):
     '''设置设备备注'''
@@ -287,7 +259,7 @@ def main():
             unsettled_task_ids = [task_id for task_id in deployment_task_ids if task_id not in settled_task_ids and task_id not in newly_added_deployment_task_ids]
             
             # 设置机器备注
-            remark(deployment_task_ids, lost_deployment_task_ids, tasks_info)
+            remark(tasks_info)
             
             machines_info = get_machines_info()
             
